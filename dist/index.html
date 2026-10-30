@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#101216" />
+    <title>Luma Studio · 图片编辑器</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="." aria-label="Luma Studio 首页">
+          <span class="brand-mark" aria-hidden="true">✦</span>
+          <span>Luma <b>Studio</b></span>
+          <span class="stage-badge">M1</span>
+        </a>
+        <div class="top-actions">
+          <button class="button button-quiet" id="openButton" type="button">
+            <span aria-hidden="true">＋</span> 打开图片
+          </button>
+          <button class="icon-button" id="settingsButton" type="button" aria-label="打开 API 设置" title="设置">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.2A3.2 3.2 0 1 0 12 8.8a3.2 3.2 0 0 0 0 6.4Zm8.2-3.2 1.4-1.1-1.9-3.3-1.7.7a7 7 0 0 0-1.7-1l-.3-1.8h-3.8l-.3 1.8a7 7 0 0 0-1.7 1l-1.7-.7-1.9 3.3L5.8 12l.2.9-1.4 1.1 1.9 3.3 1.7-.7a7 7 0 0 0 1.7 1l.3 1.8H14l.3-1.8a7 7 0 0 0 1.7-1l1.7.7 1.9-3.3-1.4-1.1.2-.9Z"/></svg>
+          </button>
+          <button class="button button-primary" id="exportButton" type="button" disabled>导出 PNG</button>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <aside class="tool-rail" aria-label="编辑工具">
+          <button class="tool active" type="button" data-tool="adjust" aria-pressed="true">
+            <span class="tool-icon">☼</span><span>调整</span>
+          </button>
+          <button class="tool" type="button" data-tool="beauty" aria-pressed="false">
+            <span class="tool-icon">◌</span><span>美颜</span>
+          </button>
+          <button class="tool" type="button" data-tool="ai" aria-pressed="false">
+            <span class="tool-icon">✦</span><span>局部 AI</span>
+          </button>
+        </aside>
+
+        <section class="canvas-zone" aria-label="图片画布">
+          <div class="canvas-toolbar">
+            <span class="document-label" id="documentLabel">未打开图片</span>
+            <div class="canvas-controls">
+              <button class="text-button" id="fitButton" type="button" disabled>适合画布</button>
+              <button class="original-button" id="originalButton" type="button" disabled>按住查看原图</button>
+            </div>
+          </div>
+          <div class="canvas-stage" id="dropZone" tabindex="0" aria-label="图片工作区，可将图片拖放到这里">
+            <div class="empty-state" id="emptyState">
+              <div class="upload-orb" aria-hidden="true">↑</div>
+              <h1>从一张图片开始</h1>
+              <p>拖放 JPEG、PNG 或 WebP 到这里<br />或从电脑中选择一张照片。</p>
+              <button class="button button-primary" id="emptyOpenButton" type="button">选择图片</button>
+              <span class="shortcut-hint">支持拖放 · 图片仅在本机处理</span>
+            </div>
+            <div class="canvas-wrap" id="canvasWrap" hidden>
+              <canvas id="editorCanvas" aria-label="当前图片编辑预览"></canvas>
+              <div class="rendering-indicator" id="renderingIndicator" hidden>正在渲染…</div>
+            </div>
+          </div>
+          <div class="canvas-footer">
+            <span id="statusText" aria-live="polite">准备就绪</span>
+            <span class="privacy-note">本地像素处理</span>
+          </div>
+        </section>
+
+        <aside class="inspector" aria-label="编辑参数">
+          <div class="panel-heading">
+            <p class="eyebrow">基础调色</p>
+            <h2 id="panelTitle">调整</h2>
+            <p id="panelDescription">用细微的色彩变化，找到恰好的氛围。</p>
+          </div>
+
+          <div id="adjustPanel" class="panel-content">
+            <div class="quick-actions">
+              <button class="preset" type="button" data-preset="warm">暖阳</button>
+              <button class="preset" type="button" data-preset="clear">通透</button>
+              <button class="preset" type="button" data-preset="soft">柔和</button>
+            </div>
+            <div class="control-group">
+              <label for="temperature"><span>色温</span><output id="temperatureValue" for="temperature">0</output></label>
+              <input id="temperature" type="range" min="-100" max="100" value="0" />
+              <div class="range-ends"><span>冷</span><span>暖</span></div>
+            </div>
+            <div class="control-group">
+              <label for="vibrance"><span>色彩</span><output id="vibranceValue" for="vibrance">0</output></label>
+              <input id="vibrance" type="range" min="-100" max="100" value="0" />
+              <div class="range-ends"><span>自然</span><span>鲜活</span></div>
+            </div>
+            <div class="control-group">
+              <label for="saturation"><span>饱和度</span><output id="saturationValue" for="saturation">0</output></label>
+              <input id="saturation" type="range" min="-100" max="100" value="0" />
+              <div class="range-ends"><span>低</span><span>高</span></div>
+            </div>
+            <div class="control-group">
+              <label for="contrast"><span>对比度</span><output id="contrastValue" for="contrast">0</output></label>
+              <input id="contrast" type="range" min="-100" max="100" value="0" />
+              <div class="range-ends"><span>柔</span><span>强</span></div>
+            </div>
+            <button class="reset-button" type="button" id="resetButton">↺ 重置所有调整</button>
+          </div>
+
+          <div id="comingSoonPanel" class="coming-soon" hidden>
+            <div class="coming-icon">✦</div>
+            <h3 id="comingTitle">功能开发中</h3>
+            <p id="comingDescription"></p>
+            <span class="future-badge">M2 / M3</span>
+          </div>
+        </aside>
+      </main>
+    </div>
+
+    <input id="fileInput" type="file" accept="image/jpeg,image/png,image/webp" hidden />
+
+    <dialog id="settingsDialog" class="settings-dialog" aria-labelledby="settingsTitle">
+      <form id="settingsForm" method="dialog">
+        <div class="dialog-heading">
+          <div><p class="eyebrow">连接配置</p><h2 id="settingsTitle">AI 接口设置</h2></div>
+          <button class="icon-button" type="button" id="closeSettingsButton" aria-label="关闭设置">×</button>
+        </div>
+        <p class="dialog-intro">M1 不会发起 AI 请求。这里保存接口与模型偏好，为 M3 的局部 AI 编辑做好准备。</p>
+        <label class="field-label" for="apiBaseUrl">API 地址<input id="apiBaseUrl" type="url" placeholder="https://api.example.com/v1" autocomplete="url" /></label>
+        <label class="field-label" for="modelName">图片编辑模型<input id="modelName" type="text" placeholder="例如：image-edit-model" /></label>
+        <label class="field-label" for="apiKey">API Key<input id="apiKey" type="password" placeholder="仅本次会话使用，不会保存" autocomplete="off" /></label>
+        <p class="security-callout"><span>◈</span> API Key 不会写入本地存储、日志或项目文件。生产版会通过安全的服务端代理调用。</p>
+        <div class="dialog-actions">
+          <button class="button button-quiet" type="button" id="cancelSettingsButton">取消</button>
+          <button class="button button-primary" type="submit">保存偏好</button>
+        </div>
+      </form>
+    </dialog>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
