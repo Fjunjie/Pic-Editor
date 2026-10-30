@@ -13,12 +13,14 @@
         <a class="brand" href="." aria-label="Luma Studio 首页">
           <span class="brand-mark" aria-hidden="true">✦</span>
           <span>Luma <b>Studio</b></span>
-          <span class="stage-badge">M1</span>
+          <span class="stage-badge">M2</span>
         </a>
         <div class="top-actions">
           <button class="button button-quiet" id="openButton" type="button">
             <span aria-hidden="true">＋</span> 打开图片
           </button>
+          <button class="icon-button" id="undoButton" type="button" aria-label="撤销" title="撤销 (Ctrl/⌘ Z)" disabled>↶</button>
+          <button class="icon-button" id="redoButton" type="button" aria-label="重做" title="重做 (Ctrl/⌘ Shift Z)" disabled>↷</button>
           <button class="icon-button" id="settingsButton" type="button" aria-label="打开 API 设置" title="设置">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.2A3.2 3.2 0 1 0 12 8.8a3.2 3.2 0 0 0 0 6.4Zm8.2-3.2 1.4-1.1-1.9-3.3-1.7.7a7 7 0 0 0-1.7-1l-.3-1.8h-3.8l-.3 1.8a7 7 0 0 0-1.7 1l-1.7-.7-1.9 3.3L5.8 12l.2.9-1.4 1.1 1.9 3.3 1.7-.7a7 7 0 0 0 1.7 1l.3 1.8H14l.3-1.8a7 7 0 0 0 1.7-1l1.7.7 1.9-3.3-1.4-1.1.2-.9Z"/></svg>
           </button>
@@ -36,6 +38,9 @@
           </button>
           <button class="tool" type="button" data-tool="ai" aria-pressed="false">
             <span class="tool-icon">✦</span><span>局部 AI</span>
+          </button>
+          <button class="tool" type="button" data-tool="history" aria-pressed="false">
+            <span class="tool-icon">↶</span><span>历史</span>
           </button>
         </aside>
 
@@ -57,12 +62,13 @@
             </div>
             <div class="canvas-wrap" id="canvasWrap" hidden>
               <canvas id="editorCanvas" aria-label="当前图片编辑预览"></canvas>
+              <canvas id="faceOverlay" aria-label="人脸选择叠层" hidden></canvas>
               <div class="rendering-indicator" id="renderingIndicator" hidden>正在渲染…</div>
             </div>
           </div>
           <div class="canvas-footer">
             <span id="statusText" aria-live="polite">准备就绪</span>
-            <span class="privacy-note">本地像素处理</span>
+            <span class="privacy-note" id="performanceText">本地像素处理</span>
           </div>
         </section>
 
@@ -100,6 +106,43 @@
               <div class="range-ends"><span>柔</span><span>强</span></div>
             </div>
             <button class="reset-button" type="button" id="resetButton">↺ 重置所有调整</button>
+          </div>
+
+          <div id="beautyPanel" class="panel-content" hidden>
+            <div class="face-status" id="faceStatus" role="status">导入人像后，点击“识别人脸”开始。</div>
+            <div class="face-actions">
+              <button class="preset" type="button" id="detectFacesButton">识别人脸</button>
+              <button class="preset" type="button" id="manualFaceButton">手动框选</button>
+            </div>
+            <label class="field-label compact-field" for="faceSelect">当前脸部
+              <select id="faceSelect" disabled><option value="">尚未选择脸部</option></select>
+            </label>
+            <p class="face-guidance" id="faceGuidance">识别仅在本机进行；若浏览器不提供检测能力，可手动在画布上框选脸部。</p>
+            <div class="quick-actions">
+              <button class="preset" type="button" data-beauty-preset="natural">自然</button>
+              <button class="preset" type="button" data-beauty-preset="portrait">轻透</button>
+            </div>
+            <div class="control-group">
+              <label for="slim"><span>瘦脸</span><output id="slimValue" for="slim">0</output></label>
+              <input id="slim" type="range" min="0" max="100" value="0" />
+              <div class="range-ends"><span>自然</span><span>明显</span></div>
+            </div>
+            <div class="control-group">
+              <label for="whiten"><span>美白</span><output id="whitenValue" for="whiten">0</output></label>
+              <input id="whiten" type="range" min="0" max="100" value="0" />
+              <div class="range-ends"><span>自然</span><span>明亮</span></div>
+            </div>
+            <div class="control-group">
+              <label for="smooth"><span>磨皮</span><output id="smoothValue" for="smooth">0</output></label>
+              <input id="smooth" type="range" min="0" max="100" value="0" />
+              <div class="range-ends"><span>保留细节</span><span>柔滑</span></div>
+            </div>
+            <button class="reset-button" type="button" id="resetBeautyButton">↺ 重置美颜</button>
+          </div>
+
+          <div id="historyPanel" class="panel-content" hidden>
+            <p class="history-intro">所有编辑都保留在当前会话。选择任一记录即可回到该步骤。</p>
+            <ol class="history-list" id="historyList" aria-label="编辑历史"></ol>
           </div>
 
           <div id="comingSoonPanel" class="coming-soon" hidden>
