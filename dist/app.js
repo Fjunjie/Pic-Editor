@@ -71,25 +71,30 @@ function drawOriginal() {
   context.putImageData(state.originalPixels, 0, 0);
 }
 
+function setRendering(isRendering, message = '正在渲染…') {
+  elements.renderingIndicator.textContent = message;
+  elements.renderingIndicator.hidden = !isRendering;
+}
+
+function waitForPaint() {
+  return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+}
+
 function scheduleRender() {
   if (!state.originalPixels || state.renderQueued) return;
   state.renderQueued = true;
-  elements.renderingIndicator.hidden = false;
+  setRendering(true);
   requestAnimationFrame(() => {
-    state.renderQueued = false;
-    renderAdjustedImage();
-    elements.renderingIndicator.hidden = true;
+    requestAnimationFrame(() => {
+      state.renderQueued = false;
+      renderAdjustedImage();
+      setRendering(false);
+    });
   });
 }
 
-function renderAdjustedImage() {
-  if (!state.originalPixels) return;
-  if (state.showOriginal) {
-    drawOriginal();
-    return;
-  }
-
-  const output = new ImageData(new Uint8ClampedArray(state.originalPixels.data), state.width, state.height);
+function applyAdjustments(sourcePixels, width, height) {
+  const output = new ImageData(new Uint8ClampedArray(sourcePixels.data), width, height);
   const pixels = output.data;
   const { temperature, vibrance, saturation, contrast } = state.adjustments;
   const temperatureShift = temperature * 1.18;
@@ -116,14 +121,26 @@ function renderAdjustedImage() {
     pixels[index + 1] = (green - 128) * contrastFactor + 128;
     pixels[index + 2] = (blue - 128) * contrastFactor + 128;
   }
+  return output;
+}
+
+function renderAdjustedImage() {
+  if (!state.originalPixels) return;
+  if (state.showOriginal) {
+    drawOriginal();
+    return;
+  }
+  const output = applyAdjustments(state.originalPixels, state.width, state.height);
   context.putImageData(output, 0, 0);
 }
 
 function fitCanvas() {
   if (!state.width) return;
-  const stage = elements.dropZone.getBoundingClientRect();
-  const availableWidth = Math.max(120, stage.width - 56);
-  const availableHeight = Math.max(120, stage.height - 56);
+  const stageStyle = window.getComputedStyle(elements.dropZone);
+  const horizontalPadding = parseFloat(stageStyle.paddingLeft) + parseFloat(stageStyle.paddingRight);
+  const verticalPadding = parseFloat(stageStyle.paddingTop) + parseFloat(stageStyle.paddingBottom);
+  const availableWidth = Math.max(120, elements.dropZone.clientWidth - horizontalPadding);
+  const availableHeight = Math.max(120, elements.dropZone.clientHeight - verticalPadding);
   const scale = Math.min(1, availableWidth / state.width, availableHeight / state.height);
   elements.canvas.style.width = `${Math.floor(state.width * scale)}px`;
   elements.canvas.style.height = `${Math.floor(state.height * scale)}px`;
@@ -187,15 +204,44 @@ function applyPreset(name) {
   setStatus('已应用预设，可继续微调');
 }
 
-function exportImage() {
-  if (!state.originalPixels) return;
+async function exportImage() {
+  if (!state.originalImage || elements.exportButton.disabled) return;
   const name = (state.fileName || 'luma-edit').replace(/\.[^.]+$/, '');
-  const link = document.createElement('a');
-  link.download = `${name}-edited.png`;
-  link.href = elements.canvas.toDataURL('image/png');
-  link.click();
-  setStatus('PNG 已开始下载');
-  showToast('已导出 PNG');
+  const sourceImage = state.originalImage;
+  const { naturalWidth, naturalHeight } = sourceImage;
+  elements.exportButton.disabled = true;
+  setStatus('正在准备原始分辨率 PNG…');
+  setRendering(true, '正在导出原始分辨率…');
+
+  await waitForPaint();
+  try {
+    const exportCanvas = document.createElement('canvas');
+    exportCanvas.width = naturalWidth;
+    exportCanvas.height = naturalHeight;
+    const exportContext = exportCanvas.getContext('2d', { willReadFrequently: true });
+    if (!exportContext) throw new Error('Canvas is unavailable');
+    exportContext.drawImage(sourceImage, 0, 0, naturalWidth, naturalHeight);
+    const originalPixels = exportContext.getImageData(0, 0, naturalWidth, naturalHeight);
+    exportContext.putImageData(applyAdjustments(originalPixels, naturalWidth, naturalHeight), 0, 0);
+
+    const blob = await new Promise((resolve) => exportCanvas.toBlob(resolve, 'image/png'));
+    if (!blob) throw new Error('PNG encoding failed');
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.download = `${name}-edited.png`;
+    link.href = url;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    setStatus(`已导出原始分辨率 PNG（${naturalWidth} × ${naturalHeight}）`);
+    showToast('已导出原始分辨率 PNG');
+  } catch (error) {
+    console.error('Image export failed:', error);
+    setStatus('导出失败，请尝试较小的图片');
+    showToast('导出失败，请尝试较小的图片');
+  } finally {
+    setRendering(false);
+    elements.exportButton.disabled = false;
+  }
 }
 
 function switchTool(tool) {
@@ -223,9 +269,18 @@ function switchTool(tool) {
 }
 
 function restorePreferences() {
-  const preferences = JSON.parse(localStorage.getItem('luma-api-preferences') || '{}');
-  document.querySelector('#apiBaseUrl').value = preferences.baseUrl || '';
-  document.querySelector('#modelName').value = preferences.model || '';
+  let preferences = {};
+  try {
+    const savedPreferences = localStorage.getItem('luma-api-preferences');
+    const parsedPreferences = savedPreferences ? JSON.parse(savedPreferences) : {};
+    if (parsedPreferences && typeof parsedPreferences === 'object' && !Array.isArray(parsedPreferences)) {
+      preferences = parsedPreferences;
+    }
+  } catch {
+    // A malformed value must not prevent the editor from starting.
+  }
+  document.querySelector('#apiBaseUrl').value = typeof preferences.baseUrl === 'string' ? preferences.baseUrl : '';
+  document.querySelector('#modelName').value = typeof preferences.model === 'string' ? preferences.model : '';
 }
 
 function savePreferences() {
@@ -239,13 +294,47 @@ function savePreferences() {
 
 document.querySelector('#openButton').addEventListener('click', () => elements.fileInput.click());
 document.querySelector('#emptyOpenButton').addEventListener('click', () => elements.fileInput.click());
-elements.fileInput.addEventListener('change', (event) => loadImage(event.target.files[0]));
+elements.fileInput.addEventListener('change', (event) => {
+  const [file] = event.target.files;
+  event.target.value = '';
+  loadImage(file);
+});
 elements.exportButton.addEventListener('click', exportImage);
 elements.fitButton.addEventListener('click', fitCanvas);
-elements.originalButton.addEventListener('pointerdown', () => { if (state.originalPixels) { state.showOriginal = true; drawOriginal(); } });
-['pointerup', 'pointerleave', 'pointercancel'].forEach((eventName) => elements.originalButton.addEventListener(eventName, () => { if (state.showOriginal) { state.showOriginal = false; scheduleRender(); } }));
-elements.originalButton.addEventListener('keydown', (event) => { if ((event.code === 'Space' || event.key === 'Enter') && state.originalPixels) { state.showOriginal = true; drawOriginal(); } });
-elements.originalButton.addEventListener('keyup', () => { if (state.showOriginal) { state.showOriginal = false; scheduleRender(); } });
+function showOriginalPreview() {
+  if (!state.originalPixels) return;
+  state.showOriginal = true;
+  drawOriginal();
+}
+
+function restoreAdjustedPreview() {
+  if (!state.showOriginal) return;
+  state.showOriginal = false;
+  scheduleRender();
+}
+
+function isOriginalPreviewKey(event) {
+  return event.code === 'Space' || event.key === 'Enter';
+}
+
+elements.originalButton.addEventListener('pointerdown', showOriginalPreview);
+['pointerup', 'pointerleave', 'pointercancel'].forEach((eventName) => elements.originalButton.addEventListener(eventName, restoreAdjustedPreview));
+elements.originalButton.addEventListener('keydown', (event) => {
+  if (!event.repeat && isOriginalPreviewKey(event)) {
+    event.preventDefault();
+    showOriginalPreview();
+  }
+});
+elements.originalButton.addEventListener('keyup', (event) => {
+  if (isOriginalPreviewKey(event)) restoreAdjustedPreview();
+});
+window.addEventListener('keyup', (event) => {
+  if (isOriginalPreviewKey(event)) restoreAdjustedPreview();
+});
+window.addEventListener('blur', restoreAdjustedPreview);
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) restoreAdjustedPreview();
+});
 
 for (const input of document.querySelectorAll('input[type="range"]')) {
   updateRangeVisual(input);
@@ -263,6 +352,29 @@ document.querySelectorAll('.tool').forEach((button) => button.addEventListener('
 ['dragleave', 'drop'].forEach((eventName) => elements.dropZone.addEventListener(eventName, (event) => { event.preventDefault(); elements.dropZone.classList.remove('dragover'); }));
 elements.dropZone.addEventListener('drop', (event) => loadImage(event.dataTransfer.files[0]));
 elements.dropZone.addEventListener('keydown', (event) => { if ((event.key === 'Enter' || event.key === ' ') && !state.originalPixels) elements.fileInput.click(); });
+
+function isFileDrop(event) {
+  return Array.from(event.dataTransfer?.types || []).includes('Files');
+}
+
+window.addEventListener('dragover', (event) => {
+  if (isFileDrop(event)) event.preventDefault();
+});
+window.addEventListener('drop', (event) => {
+  if (!isFileDrop(event)) return;
+  event.preventDefault();
+  if (!elements.dropZone.contains(event.target)) {
+    setStatus('请将图片拖放到中央画布区域');
+    showToast('图片未导入：请放到中央画布区域');
+  }
+});
+
+window.addEventListener('beforeunload', (event) => {
+  const hasUnsavedAdjustments = state.originalPixels && Object.values(state.adjustments).some((value) => value !== 0);
+  if (!hasUnsavedAdjustments) return;
+  event.preventDefault();
+  event.returnValue = '';
+});
 
 document.querySelector('#settingsButton').addEventListener('click', () => elements.settingsDialog.showModal());
 document.querySelector('#closeSettingsButton').addEventListener('click', () => elements.settingsDialog.close());
