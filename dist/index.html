@@ -13,7 +13,7 @@
         <a class="brand" href="." aria-label="Luma Studio 首页">
           <span class="brand-mark" aria-hidden="true">✦</span>
           <span>Luma <b>Studio</b></span>
-          <span class="stage-badge">M2</span>
+          <span class="stage-badge">M3</span>
         </a>
         <div class="top-actions">
           <button class="button button-quiet" id="openButton" type="button">
@@ -63,6 +63,7 @@
             <div class="canvas-wrap" id="canvasWrap" hidden>
               <canvas id="editorCanvas" aria-label="当前图片编辑预览"></canvas>
               <canvas id="faceOverlay" aria-label="人脸选择叠层" hidden></canvas>
+              <canvas id="maskOverlay" aria-label="局部 AI 选区画布" hidden></canvas>
               <div class="rendering-indicator" id="renderingIndicator" hidden>正在渲染…</div>
             </div>
           </div>
@@ -74,7 +75,7 @@
 
         <aside class="inspector" aria-label="编辑参数">
           <div class="panel-heading">
-            <p class="eyebrow">基础调色</p>
+            <p class="eyebrow">编辑工作区</p>
             <h2 id="panelTitle">调整</h2>
             <p id="panelDescription">用细微的色彩变化，找到恰好的氛围。</p>
           </div>
@@ -145,12 +146,49 @@
             <ol class="history-list" id="historyList" aria-label="编辑历史"></ol>
           </div>
 
-          <div id="comingSoonPanel" class="coming-soon" hidden>
-            <div class="coming-icon">✦</div>
-            <h3 id="comingTitle">功能开发中</h3>
-            <p id="comingDescription"></p>
-            <span class="future-badge">M2 / M3</span>
-          </div>
+          <section id="aiPanel" class="panel-content" aria-label="局部 AI 编辑" hidden>
+            <fieldset id="maskControls" class="ai-fieldset" disabled>
+              <legend>选区工具</legend>
+              <div class="ai-actions" role="group" aria-label="选区工具">
+                <button class="preset" type="button" data-mask-tool="brush" aria-pressed="true">笔刷</button>
+                <button class="preset" type="button" data-mask-tool="erase" aria-pressed="false">橡皮</button>
+                <button class="preset" type="button" data-mask-tool="lasso" aria-pressed="false">套索</button>
+                <button class="preset" type="button" data-mask-tool="rectangle" aria-pressed="false">矩形</button>
+              </div>
+              <label class="field-label" for="maskSize">笔刷大小
+                <input id="maskSize" type="range" min="1" max="15" value="5" data-ai-range />
+              </label>
+              <label class="field-label" for="maskFeather">边缘羽化
+                <input id="maskFeather" type="range" min="0" max="30" value="6" data-ai-range />
+              </label>
+              <button class="preset" id="clearMask" type="button">清空选区</button>
+            </fieldset>
+            <form id="aiForm">
+              <label class="field-label" for="aiPrompt">你想怎么修改？
+                <textarea id="aiPrompt" maxlength="2000" rows="3" required placeholder="例如：把选中的天空改成日落，保留云层"></textarea>
+              </label>
+              <div class="ai-actions" aria-label="建议提示词">
+                <button class="preset" type="button" data-ai-suggestion="移除选中区域内的主体，并自然补全背景。">移除物体</button>
+                <button class="preset" type="button" data-ai-suggestion="将选中区域内的天空改为暖色日落，保留自然的云层。">替换天空</button>
+              </div>
+              <p class="face-guidance" id="aiDestination">正在读取代理配置…</p>
+              <div class="ai-actions">
+                <button class="button button-primary" id="generateEdit" type="submit" disabled>生成预览</button>
+                <button class="preset" id="cancelEdit" type="button" hidden>取消生成</button>
+                <button class="preset" id="retryEdit" type="button" hidden>重试请求</button>
+              </div>
+            </form>
+            <p class="face-status" id="aiStatus" role="status">请先打开图片。</p>
+            <div id="aiResultControls" class="ai-actions" hidden>
+              <button class="preset" id="compareEdit" type="button" aria-pressed="false">查看应用前</button>
+              <button class="preset" id="discardEdit" type="button">放弃预览</button>
+              <button class="button button-primary" id="applyEdit" type="button">应用结果</button>
+            </div>
+            <details class="ai-history">
+              <summary>生成历史</summary>
+              <ol class="history-list" id="aiHistory"></ol>
+            </details>
+          </section>
         </aside>
       </main>
     </div>
@@ -158,19 +196,15 @@
     <input id="fileInput" type="file" accept="image/jpeg,image/png,image/webp" hidden />
 
     <dialog id="settingsDialog" class="settings-dialog" aria-labelledby="settingsTitle">
-      <form id="settingsForm" method="dialog">
+      <form method="dialog">
         <div class="dialog-heading">
           <div><p class="eyebrow">连接配置</p><h2 id="settingsTitle">AI 接口设置</h2></div>
           <button class="icon-button" type="button" id="closeSettingsButton" aria-label="关闭设置">×</button>
         </div>
-        <p class="dialog-intro">M1 不会发起 AI 请求。这里保存接口与模型偏好，为 M3 的局部 AI 编辑做好准备。</p>
-        <label class="field-label" for="apiBaseUrl">API 地址<input id="apiBaseUrl" type="url" placeholder="https://api.example.com/v1" autocomplete="url" /></label>
-        <label class="field-label" for="modelName">图片编辑模型<input id="modelName" type="text" placeholder="例如：image-edit-model" /></label>
-        <label class="field-label" for="apiKey">API Key<input id="apiKey" type="password" placeholder="仅本次会话使用，不会保存" autocomplete="off" /></label>
-        <p class="security-callout"><span>◈</span> API Key 不会写入本地存储、日志或项目文件。生产版会通过安全的服务端代理调用。</p>
+        <p class="dialog-intro" id="aiSettingsStatus" role="status">正在读取代理配置…</p>
+        <p class="security-callout">使用环境变量 IMAGE_EDIT_BASE_URL、IMAGE_EDIT_MODEL 与 IMAGE_EDIT_API_KEY 配置本地代理。只有点击生成或重试时，代理才会向供应商发送原图、蒙版和指令。</p>
         <div class="dialog-actions">
-          <button class="button button-quiet" type="button" id="cancelSettingsButton">取消</button>
-          <button class="button button-primary" type="submit">保存偏好</button>
+          <button class="button button-primary" type="submit">关闭</button>
         </div>
       </form>
     </dialog>
