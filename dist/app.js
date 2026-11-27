@@ -1,3 +1,5 @@
+import { createAiEditor } from './ai-editor.js';
+
 const MAX_PREVIEW_EDGE = 2400;
 const RENDER_TILE_HEIGHT = 160;
 const HISTORY_LIMIT = 50;
@@ -18,6 +20,8 @@ const state = {
   renderQueued: false,
   history: [],
   historyIndex: -1,
+  aiLayers: [],
+  tool: 'adjust',
 };
 
 const elements = {
@@ -29,11 +33,10 @@ const elements = {
   originalButton: document.querySelector('#originalButton'), fitButton: document.querySelector('#fitButton'),
   statusText: document.querySelector('#statusText'), performanceText: document.querySelector('#performanceText'),
   renderingIndicator: document.querySelector('#renderingIndicator'), toast: document.querySelector('#toast'),
-  settingsDialog: document.querySelector('#settingsDialog'), settingsForm: document.querySelector('#settingsForm'),
+  settingsDialog: document.querySelector('#settingsDialog'),
   adjustPanel: document.querySelector('#adjustPanel'), beautyPanel: document.querySelector('#beautyPanel'),
-  historyPanel: document.querySelector('#historyPanel'), comingSoonPanel: document.querySelector('#comingSoonPanel'),
+  historyPanel: document.querySelector('#historyPanel'), aiPanel: document.querySelector('#aiPanel'),
   panelTitle: document.querySelector('#panelTitle'), panelDescription: document.querySelector('#panelDescription'),
-  comingTitle: document.querySelector('#comingTitle'), comingDescription: document.querySelector('#comingDescription'),
   faceStatus: document.querySelector('#faceStatus'), faceGuidance: document.querySelector('#faceGuidance'),
   faceSelect: document.querySelector('#faceSelect'), detectFacesButton: document.querySelector('#detectFacesButton'),
   manualFaceButton: document.querySelector('#manualFaceButton'), historyList: document.querySelector('#historyList'),
@@ -43,6 +46,16 @@ const context = elements.canvas.getContext('2d', { willReadFrequently: true });
 const overlayContext = elements.overlay.getContext('2d');
 let toastTimer;
 let historyTimer;
+let loadVersion = 0;
+const ai = createAiEditor({
+  render: scheduleRender,
+  getApplied: () => state.aiLayers,
+  apply(id, prompt) {
+    state.aiLayers.push(id);
+    recordHistory(`局部 AI · ${prompt.slice(0, 40)}`);
+    setStatus('已应用局部 AI 编辑');
+  },
+});
 
 function formatValue(value) { return Number(value) > 0 ? `+${value}` : String(value); }
 function setStatus(message) { elements.statusText.textContent = message; }
@@ -74,7 +87,7 @@ function updateControls() {
 }
 
 function captureSnapshot() {
-  return { adjustments: { ...state.adjustments }, beauty: { ...state.beauty }, faces: cloneFaces(state.faces), selectedFaceIndex: state.selectedFaceIndex };
+  return { adjustments: { ...state.adjustments }, beauty: { ...state.beauty }, faces: cloneFaces(state.faces), selectedFaceIndex: state.selectedFaceIndex, aiLayers: [...state.aiLayers] };
 }
 function sameSnapshot(first, second) { return JSON.stringify(first) === JSON.stringify(second); }
 
@@ -92,10 +105,12 @@ function renderHistory() {
     button.type = 'button';
     button.dataset.historyIndex = String(index);
     button.append(document.createTextNode(entry.label));
-    const time = document.createElement('time');
-    time.textContent = index === state.historyIndex ? '当前步骤' : `步骤 ${index + 1}`;
-    button.append(time);
-    elements.historyList.append(button);
+    const step = document.createElement('small');
+    step.textContent = index === state.historyIndex ? '当前步骤' : `步骤 ${index + 1}`;
+    button.append(step);
+    const item = document.createElement('li');
+    item.append(button);
+    elements.historyList.append(item);
   });
   updateHistoryControls();
 }
@@ -125,7 +140,9 @@ function restoreHistory(index) {
   state.beauty = { ...entry.snapshot.beauty };
   state.faces = cloneFaces(entry.snapshot.faces);
   state.selectedFaceIndex = entry.snapshot.selectedFaceIndex;
+  state.aiLayers = [...entry.snapshot.aiLayers];
   state.historyIndex = index;
+  ai.discard();
   updateControls(); updateFaceUi(); renderHistory(); scheduleRender();
 }
 function undo() { if (state.historyIndex > 0) { restoreHistory(state.historyIndex - 1); setStatus('已撤销'); } }
@@ -228,8 +245,11 @@ function renderImage() {
   if (!state.originalPixels) return;
   const startedAt = performance.now();
   if (state.showOriginal) context.putImageData(state.originalPixels, 0, 0);
-  else context.putImageData(applyBeauty(applyAdjustments(state.originalPixels, state.width, state.height), state.width, state.height), 0, 0);
-  elements.performanceText.textContent = `${Math.round(performance.now() - startedAt)} ms 预览 · 本地分块处理`;
+  else {
+    context.putImageData(applyBeauty(applyAdjustments(state.originalPixels, state.width, state.height), state.width, state.height), 0, 0);
+    ai.draw(context, state.width, state.height, state.aiLayers, true);
+  }
+  elements.performanceText.textContent = `${Math.round(performance.now() - startedAt)} ms 预览 · 本地合成`;
   renderFaceOverlay();
 }
 function scheduleRender() {
@@ -252,24 +272,38 @@ function resetHistory() { state.history = []; state.historyIndex = -1; recordHis
 function loadImage(file) {
   if (!file || !file.type.startsWith('image/')) return;
   if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) { showToast('请使用 JPEG、PNG 或 WebP 图片'); return; }
+  const version = ++loadVersion;
   setStatus('正在载入图片…');
   const reader = new FileReader();
+  const loadError = () => {
+    if (version !== loadVersion) return;
+    setStatus('图片载入失败');
+    showToast('无法读取这张图片，请换一张再试。');
+  };
+  reader.onerror = loadError;
   reader.onload = () => {
+    if (version !== loadVersion) return;
     const image = new Image();
     image.onload = () => {
+      if (version !== loadVersion) return;
+      window.clearTimeout(historyTimer);
       const scale = Math.min(1, MAX_PREVIEW_EDGE / Math.max(image.naturalWidth, image.naturalHeight));
       state.width = Math.max(1, Math.round(image.naturalWidth * scale)); state.height = Math.max(1, Math.round(image.naturalHeight * scale));
       state.fileName = file.name; state.originalImage = image;
       state.adjustments = { temperature: 0, vibrance: 0, saturation: 0, contrast: 0 }; state.beauty = { slim: 0, whiten: 0, smooth: 0 };
       state.faces = []; state.selectedFaceIndex = -1; state.showOriginal = false; state.selectingFace = false;
+      state.manualDraft = null;
+      state.aiLayers = [];
       elements.canvas.width = state.width; elements.canvas.height = state.height; elements.overlay.width = state.width; elements.overlay.height = state.height;
       context.drawImage(image, 0, 0, state.width, state.height); state.originalPixels = context.getImageData(0, 0, state.width, state.height);
+      ai.load(image);
       elements.emptyState.hidden = true; elements.canvasWrap.hidden = false; elements.exportButton.disabled = false; elements.originalButton.disabled = false; elements.fitButton.disabled = false;
       elements.documentLabel.textContent = `${file.name} · ${image.naturalWidth} × ${image.naturalHeight}`;
       updateControls(); updateFaceUi(); resetHistory(); fitCanvas(); renderFaceOverlay();
       setStatus(scale < 1 ? `已载入预览（为流畅编辑缩放至 ${state.width} × ${state.height}）` : '已载入，所有调整实时显示');
     };
-    image.onerror = () => showToast('无法读取这张图片，请换一张再试。'); image.src = reader.result;
+    image.onerror = loadError;
+    image.src = reader.result;
   };
   reader.readAsDataURL(file);
 }
@@ -301,7 +335,7 @@ function updateFaceUi(message) {
 function renderFaceOverlay() {
   if (!state.width || !overlayContext) return;
   overlayContext.clearRect(0, 0, state.width, state.height);
-  const shouldShow = state.faces.length || state.selectingFace || state.manualDraft;
+  const shouldShow = state.tool === 'beauty' && !state.showOriginal && (state.faces.length || state.selectingFace || state.manualDraft);
   elements.overlay.hidden = !shouldShow; elements.overlay.classList.toggle('selecting', state.selectingFace);
   if (!shouldShow) return;
   overlayContext.lineWidth = Math.max(2, state.width / 600);
@@ -350,9 +384,11 @@ async function exportImage() {
   try {
     const exportCanvas = document.createElement('canvas'); exportCanvas.width = naturalWidth; exportCanvas.height = naturalHeight;
     const exportContext = exportCanvas.getContext('2d', { willReadFrequently: true }); if (!exportContext) throw new Error('Canvas is unavailable');
+    if (state.originalImage !== sourceImage) return;
     exportContext.drawImage(sourceImage, 0, 0, naturalWidth, naturalHeight);
     const originalPixels = exportContext.getImageData(0, 0, naturalWidth, naturalHeight);
     exportContext.putImageData(applyBeauty(applyAdjustments(originalPixels, naturalWidth, naturalHeight), naturalWidth, naturalHeight, naturalWidth / state.width), 0, 0);
+    ai.draw(exportContext, naturalWidth, naturalHeight, state.aiLayers);
     const blob = await new Promise((resolve) => exportCanvas.toBlob(resolve, 'image/png')); if (!blob) throw new Error('PNG encoding failed');
     const url = URL.createObjectURL(blob), link = document.createElement('a'); link.download = `${name}-edited.png`; link.href = url; link.click(); window.setTimeout(() => URL.revokeObjectURL(url), 0);
     setStatus(`已导出原始分辨率 PNG（${naturalWidth} × ${naturalHeight}）`); showToast('已导出原始分辨率 PNG');
@@ -361,30 +397,34 @@ async function exportImage() {
 }
 
 function switchTool(tool) {
+  state.tool = tool;
+  if (tool !== 'beauty') cancelFaceSelection();
+  ai.activate(tool === 'ai');
   document.querySelectorAll('.tool').forEach((button) => { const active = button.dataset.tool === tool; button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active)); });
-  const details = { adjust: ['调整', '用细微的色彩变化，找到恰好的氛围。'], beauty: ['自然美颜', '本机处理人像；选择脸部后再以温和的强度微调。'], history: ['编辑历史', '撤销、重做或直接回到任一编辑步骤。'], ai: ['局部 AI 编辑', 'M3 将支持圈选区域、输入自然语言，并在应用前比较 AI 生成结果。'] };
-  elements.panelTitle.textContent = details[tool][0]; elements.panelDescription.textContent = tool === 'ai' ? '后续里程碑功能' : details[tool][1];
-  elements.adjustPanel.hidden = tool !== 'adjust'; elements.beautyPanel.hidden = tool !== 'beauty'; elements.historyPanel.hidden = tool !== 'history'; elements.comingSoonPanel.hidden = tool !== 'ai';
-  if (tool === 'ai') { elements.comingTitle.textContent = details.ai[0]; elements.comingDescription.textContent = details.ai[1]; }
+  const details = { adjust: ['调整', '用细微的色彩变化，找到恰好的氛围。'], beauty: ['自然美颜', '本机处理人像；选择脸部后再以温和的强度微调。'], history: ['编辑历史', '撤销、重做或直接回到任一编辑步骤。'], ai: ['局部 AI 编辑', '圈出要修改的位置，生成预览后再决定是否应用。'] };
+  elements.panelTitle.textContent = details[tool][0]; elements.panelDescription.textContent = details[tool][1];
+  elements.adjustPanel.hidden = tool !== 'adjust'; elements.beautyPanel.hidden = tool !== 'beauty'; elements.historyPanel.hidden = tool !== 'history'; elements.aiPanel.hidden = tool !== 'ai';
   renderFaceOverlay();
-}
-function restorePreferences() {
-  let preferences = {};
-  try { const saved = localStorage.getItem('luma-api-preferences'), parsed = saved ? JSON.parse(saved) : {}; if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) preferences = parsed; } catch { /* Ignore malformed storage. */ }
-  document.querySelector('#apiBaseUrl').value = typeof preferences.baseUrl === 'string' ? preferences.baseUrl : '';
-  document.querySelector('#modelName').value = typeof preferences.model === 'string' ? preferences.model : '';
-}
-function savePreferences() {
-  localStorage.setItem('luma-api-preferences', JSON.stringify({ baseUrl: document.querySelector('#apiBaseUrl').value.trim(), model: document.querySelector('#modelName').value.trim() }));
-  document.querySelector('#apiKey').value = ''; elements.settingsDialog.close(); showToast('已保存接口偏好；API Key 未保存');
+  scheduleRender();
 }
 
 document.querySelector('#openButton').addEventListener('click', () => elements.fileInput.click());
 document.querySelector('#emptyOpenButton').addEventListener('click', () => elements.fileInput.click());
 elements.fileInput.addEventListener('change', (event) => { const [file] = event.target.files; event.target.value = ''; loadImage(file); });
 elements.exportButton.addEventListener('click', exportImage); elements.undoButton.addEventListener('click', undo); elements.redoButton.addEventListener('click', redo); elements.fitButton.addEventListener('click', fitCanvas);
-function showOriginalPreview() { if (state.originalPixels) { state.showOriginal = true; context.putImageData(state.originalPixels, 0, 0); } }
-function restoreAdjustedPreview() { if (state.showOriginal) { state.showOriginal = false; scheduleRender(); } }
+function showOriginalPreview() {
+  if (!state.originalPixels) return;
+  state.showOriginal = true;
+  ai.original(true);
+  renderFaceOverlay();
+  context.putImageData(state.originalPixels, 0, 0);
+}
+function restoreAdjustedPreview() {
+  if (!state.showOriginal) return;
+  state.showOriginal = false;
+  ai.original(false);
+  scheduleRender();
+}
 function isOriginalPreviewKey(event) { return event.code === 'Space' || event.key === 'Enter'; }
 elements.originalButton.addEventListener('pointerdown', showOriginalPreview);
 ['pointerup', 'pointerleave', 'pointercancel'].forEach((eventName) => elements.originalButton.addEventListener(eventName, restoreAdjustedPreview));
@@ -392,7 +432,7 @@ elements.originalButton.addEventListener('keydown', (event) => { if (!event.repe
 elements.originalButton.addEventListener('keyup', (event) => { if (isOriginalPreviewKey(event)) restoreAdjustedPreview(); });
 window.addEventListener('keyup', (event) => { if (isOriginalPreviewKey(event)) restoreAdjustedPreview(); }); window.addEventListener('blur', restoreAdjustedPreview); document.addEventListener('visibilitychange', () => { if (document.hidden) restoreAdjustedPreview(); });
 
-for (const input of document.querySelectorAll('input[type="range"]')) {
+for (const input of document.querySelectorAll('input[type="range"]:not([data-ai-range])')) {
   updateRangeVisual(input);
   input.addEventListener('input', () => { const isAdjustment = Object.hasOwn(state.adjustments, input.id); (isAdjustment ? state.adjustments : state.beauty)[input.id] = Number(input.value); updateRangeVisual(input); scheduleRender(); queueHistory(isAdjustment ? '调整参数' : '美颜参数'); });
   input.addEventListener('change', () => { window.clearTimeout(historyTimer); recordHistory(Object.hasOwn(state.adjustments, input.id) ? '调整参数' : '美颜参数'); });
@@ -412,6 +452,13 @@ elements.overlay.addEventListener('pointerup', (event) => {
   if (face.width < 24 || face.height < 24) { updateFaceUi('框选区域太小，请重新拖动框选完整脸部。'); return; }
   state.faces.push(constrainFace(face, state.width, state.height)); state.selectedFaceIndex = state.faces.length - 1; updateFaceUi('已手动选择脸部。所有效果只作用于这张脸。'); recordHistory('手动选择脸部'); scheduleRender();
 });
+function cancelFaceSelection() {
+  if (!state.selectingFace) return;
+  state.selectingFace = false;
+  state.manualDraft = null;
+  updateFaceUi();
+}
+elements.overlay.addEventListener('pointercancel', cancelFaceSelection);
 
 ['dragenter', 'dragover'].forEach((eventName) => elements.dropZone.addEventListener(eventName, (event) => { event.preventDefault(); elements.dropZone.classList.add('dragover'); }));
 ['dragleave', 'drop'].forEach((eventName) => elements.dropZone.addEventListener(eventName, (event) => { event.preventDefault(); elements.dropZone.classList.remove('dragover'); }));
@@ -420,8 +467,25 @@ elements.dropZone.addEventListener('keydown', (event) => { if ((event.key === 'E
 function isFileDrop(event) { return Array.from(event.dataTransfer?.types || []).includes('Files'); }
 window.addEventListener('dragover', (event) => { if (isFileDrop(event)) event.preventDefault(); });
 window.addEventListener('drop', (event) => { if (isFileDrop(event)) { event.preventDefault(); if (!elements.dropZone.contains(event.target)) { setStatus('请将图片拖放到中央画布区域'); showToast('图片未导入：请放到中央画布区域'); } } });
-window.addEventListener('keydown', (event) => { if (!(event.ctrlKey || event.metaKey) || event.altKey) return; if (event.key.toLowerCase() === 'z') { event.preventDefault(); if (event.shiftKey) redo(); else undo(); } else if (event.key.toLowerCase() === 'y') { event.preventDefault(); redo(); } });
+window.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !elements.settingsDialog.open) {
+    ai.cancelGesture();
+    cancelFaceSelection();
+  }
+  if (event.defaultPrevented || event.isComposing || !(event.ctrlKey || event.metaKey) || event.altKey) return;
+  const target = event.target;
+  if (elements.settingsDialog.open || target?.isContentEditable || target?.matches?.('textarea, select, input:not([type="range"])')) return;
+  const key = event.key.toLowerCase();
+  if (key === 'z' || key === 'y') {
+    event.preventDefault();
+    if (key === 'y' || event.shiftKey) redo();
+    else undo();
+  }
+});
 window.addEventListener('beforeunload', (event) => { if (state.originalPixels && state.historyIndex > 0) { event.preventDefault(); event.returnValue = ''; } });
-document.querySelector('#settingsButton').addEventListener('click', () => elements.settingsDialog.showModal()); document.querySelector('#closeSettingsButton').addEventListener('click', () => elements.settingsDialog.close()); document.querySelector('#cancelSettingsButton').addEventListener('click', () => elements.settingsDialog.close()); elements.settingsForm.addEventListener('submit', (event) => { event.preventDefault(); savePreferences(); });
+document.querySelector('#settingsButton').addEventListener('click', () => {
+  elements.settingsDialog.showModal();
+  void ai.refreshConfig();
+});
+document.querySelector('#closeSettingsButton').addEventListener('click', () => elements.settingsDialog.close());
 window.addEventListener('resize', () => { fitCanvas(); renderFaceOverlay(); });
-restorePreferences();

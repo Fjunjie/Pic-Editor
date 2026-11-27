@@ -23,7 +23,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .brand { color: inherit; text-decoration: none; font-size: 17px; font-weight: 450; letter-spacing: -.04em; display: flex; align-items: center; gap: 7px; }
 .brand b { font-weight: 750; }
 .brand-mark { width: 26px; height: 26px; display: grid; place-items: center; background: var(--accent); border-radius: 8px; color: var(--accent-ink); font-size: 17px; font-weight: 900; }
-.stage-badge, .future-badge { color: #ccceb9; border: 1px solid #576142; border-radius: 999px; font-size: 10px; font-weight: 750; letter-spacing: .08em; padding: 3px 6px; margin-left: 3px; }
+.stage-badge { color: #ccceb9; border: 1px solid #576142; border-radius: 999px; font-size: 10px; font-weight: 750; letter-spacing: .08em; padding: 3px 6px; margin-left: 3px; }
 .top-actions { display: flex; align-items: center; gap: 9px; }
 .button, .icon-button, .text-button, .preset, .reset-button { border: 0; border-radius: 9px; transition: transform .18s, background .18s, color .18s, border-color .18s; }
 .button { min-height: 38px; padding: 0 14px; font-size: 13px; font-weight: 650; }
@@ -62,6 +62,18 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 #editorCanvas { display: block; background: #101216; }
 #faceOverlay { position: absolute; inset: 0; display: block; width: 100%; height: 100%; pointer-events: none; }
 #faceOverlay.selecting { pointer-events: auto; cursor: crosshair; }
+#faceOverlay[hidden] { display: none; }
+#maskOverlay { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: crosshair; }
+#maskOverlay.passive { pointer-events: none; }
+.ai-fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin: 0 0 16px; font-size: 12px; min-width: 0; }
+.ai-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.ai-actions[hidden] { display: none; }
+.ai-actions [aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.ai-fieldset:disabled, #aiPanel button:disabled { opacity: .5; cursor: not-allowed; }
+.ai-history { font-size: 12px; margin-top: 16px; }
+.ai-history summary { cursor: pointer; margin-bottom: 10px; }
+#aiPrompt { width: 100%; resize: vertical; padding: 8px; background: #171b20; border: 1px solid #3c444e; border-radius: 8px; color: inherit; font: inherit; }
+#aiDestination, #aiSettingsStatus, .history-entry { overflow-wrap: anywhere; }
 .rendering-indicator { position: absolute; right: 10px; bottom: 10px; padding: 6px 9px; border-radius: 6px; background: rgba(13,16,18,.76); color: #e8eddb; font-size: 11px; line-height: 1; }
 .canvas-footer { padding: 0 23px; border-top: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: #7f858c; }
 .privacy-note { color: #adb996; }
@@ -91,12 +103,7 @@ input[type="range"]::-moz-range-thumb { height: 10px; width: 10px; border-radius
 .history-entry { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; background: #1a1f25; color: #cbd0d4; text-align: left; font-size: 12px; }
 .history-entry:hover { border-color: #68794a; color: var(--text); }
 .history-entry.current { color: var(--accent); border-color: #68794a; background: #222b1b; }
-.history-entry time { display: block; margin-top: 3px; color: #7e858c; font-size: 10px; }
-.coming-soon { padding: 32px 6px; text-align: center; color: var(--muted); }
-.coming-icon { margin: 6px auto 16px; width: 46px; height: 46px; display: grid; place-items: center; border-radius: 15px; background: #29263d; color: var(--violet); font-size: 23px; }
-.coming-soon h3 { color: var(--text); margin: 0; font-size: 16px; }
-.coming-soon p { font-size: 12px; line-height: 1.6; margin: 9px auto 15px; max-width: 225px; }
-.future-badge { display: inline-block; margin: 0; color: var(--violet); border-color: #564b7b; }
+.history-entry small { display: block; margin-top: 3px; color: #7e858c; font-size: 10px; }
 .settings-dialog { width: min(480px, calc(100vw - 32px)); color: var(--text); background: #20252d; border: 1px solid #424a55; border-radius: 16px; padding: 0; box-shadow: 0 28px 80px #000b; }
 .settings-dialog::backdrop { background: rgba(3,5,7,.68); backdrop-filter: blur(4px); }
 .settings-dialog form { padding: 23px; }
