@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { crc32 } from './png-crc.mjs';
 
 const MAX_IMAGE = 10 * 1024 * 1024;
 const MAX_MASK = 4 * 1024 * 1024;
@@ -55,6 +56,33 @@ async function readLimited(stream, limit, status, message) {
   return Buffer.concat(chunks, length);
 }
 
+function hasCompletePngChunks(png) {
+  let imageBytes = 0;
+  let seenImageData = false;
+  let imageDataEnded = false;
+  for (let offset = PNG_SIGNATURE.length; png.length - offset >= 12;) {
+    const length = png.readUInt32BE(offset);
+    if (length > png.length - offset - 12) return false;
+    const crcOffset = offset + 8 + length;
+    const next = crcOffset + 4;
+    const type = png.toString('latin1', offset + 4, offset + 8);
+    if (!/^[A-Za-z]{4}$/.test(type)) return false;
+    if (crc32(png.subarray(offset + 4, crcOffset)) !== png.readUInt32BE(crcOffset)) return false;
+
+    if (type === 'IHDR' && offset !== PNG_SIGNATURE.length) return false;
+    if (type === 'IEND') return length === 0 && imageBytes > 0 && next === png.length;
+    if (type === 'IDAT') {
+      if (imageDataEnded) return false;
+      seenImageData = true;
+      imageBytes += length;
+    } else if (seenImageData) {
+      imageDataEnded = true;
+    }
+    offset = next;
+  }
+  return false;
+}
+
 function readPng(value, limit, status, message) {
   if (typeof value !== 'string' || !value || value.length > base64Limit(limit) ||
       value.length % 4 || /[^a-zA-Z0-9+/=]/.test(value)) {
@@ -63,7 +91,7 @@ function readPng(value, limit, status, message) {
   const png = Buffer.from(value, 'base64');
   if (png.length < 33 || png.length > limit || png.toString('base64') !== value ||
       !png.subarray(0, 8).equals(PNG_SIGNATURE) || png.readUInt32BE(8) !== 13 ||
-      png.toString('ascii', 12, 16) !== 'IHDR') {
+      png.toString('latin1', 12, 16) !== 'IHDR' || !hasCompletePngChunks(png)) {
     throw new RequestError(status, message);
   }
   return { png, size: `${png.readUInt32BE(16)}x${png.readUInt32BE(20)}`, colorType: png[25] };

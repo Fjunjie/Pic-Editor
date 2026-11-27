@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { request } from 'node:http';
 import { test } from 'node:test';
-import { crc32, deflateSync } from 'node:zlib';
+import { deflateSync } from 'node:zlib';
+import { crc32 } from '../png-crc.mjs';
 import { createEditorServer, readConfig } from '../server.mjs';
 
 const config = readConfig({
@@ -10,6 +11,15 @@ const config = readConfig({
   IMAGE_EDIT_MODEL: 'test-model',
   IMAGE_EDIT_API_KEY: 'test-secret',
 });
+
+function chunk(type, data) {
+  const content = Buffer.concat([Buffer.from(type), data]);
+  const result = Buffer.alloc(data.length + 12);
+  result.writeUInt32BE(data.length);
+  content.copy(result, 4);
+  result.writeUInt32BE(crc32(content), result.length - 4);
+  return result;
+}
 
 function png(width, height, alpha) {
   const header = Buffer.alloc(13);
@@ -21,18 +31,12 @@ function png(width, height, alpha) {
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) pixels[y * (1 + width * 4) + 4 + x * 4] = alpha;
   }
-  const chunk = (type, data) => {
-    const content = Buffer.concat([Buffer.from(type), data]);
-    const result = Buffer.alloc(data.length + 12);
-    result.writeUInt32BE(data.length);
-    content.copy(result, 4);
-    result.writeUInt32BE(crc32(content), result.length - 4);
-    return result;
-  };
+  const compressed = deflateSync(pixels);
   return Buffer.concat([
     Buffer.from('89504e470d0a1a0a', 'hex'),
     chunk('IHDR', header),
-    chunk('IDAT', deflateSync(pixels)),
+    chunk('IDAT', compressed.subarray(0, 2)),
+    chunk('IDAT', compressed.subarray(2)),
     chunk('IEND', Buffer.alloc(0)),
   ]);
 }
@@ -139,6 +143,45 @@ test('handles an unconfigured proxy and sanitizes upstream errors and invalid re
     assert.match(error, pattern);
     assert.doesNotMatch(error, /test-secret/);
   }
+});
+
+test('rejects incomplete and malformed PNG chunks in uploads and provider results', async (t) => {
+  const header = image.subarray(0, 33);
+  const end = image.subarray(-12);
+  const badCrc = Buffer.from(image);
+  badCrc[41] ^= 1;
+  const oversizedChunk = Buffer.from(image);
+  oversizedChunk.writeUInt32BE(0xffffffff, 33);
+  const invalid = [
+    ['header only', header],
+    ['missing IDAT', Buffer.concat([header, end])],
+    ['empty image data', Buffer.concat([header, chunk('IDAT', Buffer.alloc(0)), end])],
+    ['truncated IDAT', image.subarray(0, -18)],
+    ['missing IEND', image.subarray(0, -12)],
+    ['truncated IEND', image.subarray(0, -1)],
+    ['nonempty IEND', Buffer.concat([image.subarray(0, -12), chunk('IEND', Buffer.of(0))])],
+    ['bytes after IEND', Buffer.concat([image, Buffer.of(0)])],
+    ['bad chunk checksum', badCrc],
+    ['chunk length exceeds remaining bytes', oversizedChunk],
+  ];
+  let forwarded = 0;
+  let output;
+  const { edit } = await start(t, () => {
+    forwarded++;
+    return Response.json({ data: [{ b64_json: output }] });
+  });
+  for (const [reason, bytes] of invalid) {
+    output = bytes.toString('base64');
+    for (const field of ['image', 'mask']) {
+      const upload = await edit({ ...payload, [field]: output });
+      assert.equal(upload.status, 400, `${field}: ${reason}`);
+      await upload.json();
+    }
+    const result = await edit();
+    assert.equal(result.status, 502, `provider: ${reason}`);
+    assert.match((await result.json()).error, /PNG/);
+  }
+  assert.equal(forwarded, invalid.length);
 });
 
 test('aborts the upstream request when the browser disconnects', { timeout: 5000 }, async (t) => {
